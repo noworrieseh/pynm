@@ -32,6 +32,7 @@ jobs:
         run: python -m build --wheel
 
       - name: Verify wheel
+        shell: bash
         run: |
           ls -la dist/
           python -m pip install dist/*.whl
@@ -69,9 +70,12 @@ jobs:
           path: dist/
 
       - name: Install wheel
-        run: pip install dist/*.whl
+        shell: bash
+        run: |
+          pip install dist/*.whl
 
       - name: Run tests
+        shell: bash
         run: |
           pip install pytest pytest-cov
           python -m pytest tests/ -v
@@ -96,3 +100,5 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
