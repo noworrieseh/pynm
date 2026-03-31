@@ -1,6 +1,7 @@
 import subprocess
 import sys
 from io import StringIO
+from pathlib import Path
 
 import pytest
 
@@ -246,23 +247,21 @@ class TestCLIIntegration:
         assert len(lines) > 0
 
     def test_cli_pclntab_go_bootstrap(self):
-        """Test that -pclntab works with stripped Go bootstrap binary."""
-        import os
+        """Test that -pclntab works with Go 1.4 PPC binary."""
+        test_dir = Path(__file__).parent
+        go_binary = test_dir / "go_binaries" / "go_1.4.3_darwin_ppc_test"
 
-        project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        go_bootstrap = os.path.join(project_dir, "go_bootstrap")
-
-        if not os.path.exists(go_bootstrap):
-            pytest.skip("go_bootstrap not found")
+        if not go_binary.exists():
+            pytest.skip("go_1.4.3_darwin_ppc_test not found")
 
         result = subprocess.run(
-            [sys.executable, "-m", "pynm", "-pclntab", go_bootstrap],
+            [sys.executable, "-m", "pynm", "-pclntab", str(go_binary)],
             capture_output=True,
             text=True,
         )
         assert result.returncode == 0
         lines = result.stdout.strip().split("\n")
-        assert len(lines) > 100  # go_bootstrap should have many symbols
+        assert len(lines) > 100  # go_1.4.3_darwin_ppc_test should have many symbols
 
 
 class TestStandaloneExecutable:

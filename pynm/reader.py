@@ -329,11 +329,11 @@ class Reader:
 
         # ELF header offsets differ between 32-bit and 64-bit
         # 32-bit ELF: e_shoff at 32, e_shentsize at 46, e_shnum at 48
-        # 64-bit ELF: e_shoff at 24, e_shentsize at 46, e_shnum at 48
+        # 64-bit ELF: e_shoff at 40, e_shentsize at 58, e_shnum at 60
         if is_64:
-            e_shoff = self._unpack(data[24:32], "Q", is_le)
-            e_shentsize = self._unpack(data[46:48], "H", is_le)
-            e_shnum = self._unpack(data[48:50], "H", is_le)
+            e_shoff = self._unpack(data[40:48], "Q", is_le)
+            e_shentsize = self._unpack(data[58:60], "H", is_le)
+            e_shnum = self._unpack(data[60:62], "H", is_le)
         else:
             e_shoff = self._unpack(data[32:36], "I", is_le)
             e_shentsize = self._unpack(data[46:48], "H", is_le)
@@ -364,8 +364,9 @@ class Reader:
                 continue
 
             sh_type = self._unpack(data[offset + 4 : offset + 8], "I", is_le)
-            # 32-bit: sh_link at 24, 64-bit: sh_link at 40
-            sh_link_offset = 24 if is_64 else 24
+            # 32-bit: sh_link at 24, sh_offset at 16, sh_size at 20
+            # 64-bit: sh_link at 40, sh_offset at 24, sh_size at 32
+            sh_link_offset = 40 if is_64 else 24
             sh_link = self._unpack(
                 data[offset + sh_link_offset : offset + sh_link_offset + 4], "I", is_le
             )
@@ -412,7 +413,11 @@ class Reader:
         if symtab_offset == 0:
             return syms
 
-        num_syms = symtab_size // symtab_entsize if symtab_entsize else 0
+        # Use default entry size if sh_entsize is 0 (per ELF spec)
+        if symtab_entsize == 0:
+            symtab_entsize = 24 if is_64 else 16
+        
+        num_syms = symtab_size // symtab_entsize
 
         for i in range(num_syms):
             offset = symtab_offset + i * symtab_entsize
@@ -1118,29 +1123,61 @@ class Reader:
         # _func structure is 24 bytes for Go 1.18+
         func_size = 24
 
-        # Read function names from funcnametab
-        # Names are null-terminated strings, stored consecutively
-        names = {}  # offset -> name
-        pos = funcname_offset
-        while pos < pclntab_size - 1:
-            end = pclntab.find(b"\x00", pos)
-            if end <= pos or end > pos + 500:
-                break
-            name_len = end - pos
-            if name_len >= 3:
-                try:
-                    name = pclntab[pos:end].decode("utf-8", errors="replace")
-                    # Validate: Go function names contain specific characters
-                    if any(c in name for c in "./()*[]<>"):
-                        names[pos] = name
-                except Exception:
-                    pass
-            pos = end + 1
+        # Helper function to reconstruct full function name from suffix offset
+        # Go stores fully qualified names but function entries may point to suffixes
+        # e.g., "flag.(*FlagSet).Set" stored once, multiple entries point to "Set"
+        def get_full_name(name_off: int) -> str:
+            """Get full function name by finding the start of the name string.
+
+            Args:
+                name_off: Offset into pclntab where name (or name suffix) starts.
+
+            Returns:
+                The full function name, or empty string if invalid.
+            """
+            # Validate name_off is within funcnametab bounds
+            if name_off < funcname_offset or name_off >= pcln_offset:
+                return ""
+
+            # Find the end of the name (null terminator)
+            end = pclntab.find(b"\x00", name_off)
+            if end <= name_off or end - name_off > 500:
+                return ""
+
+            # Don't read past pcln_offset (end of funcnametab)
+            if end > pcln_offset:
+                end = pcln_offset
+
+            # Find the start of the name by looking for the previous null byte
+            # The name starts right after the previous null (or at funcname_offset)
+            start = funcname_offset
+            prev_null = pclntab.rfind(b"\x00", funcname_offset, name_off)
+            if prev_null >= funcname_offset:
+                start = prev_null + 1
+
+            # Extract the full name
+            try:
+                full_name = pclntab[start:end].decode("utf-8", errors="replace")
+                
+                # Validate: should look like a Go function name
+                if len(full_name) < 2 or len(full_name) > 200:
+                    return ""
+                
+                # Go function names should be mostly printable ASCII
+                # Check that at least 80% of characters are printable ASCII
+                printable_count = sum(1 for c in full_name if 0x20 <= ord(c) < 0x7f)
+                if printable_count < len(full_name) * 0.8:
+                    return ""
+                
+                return full_name
+            except Exception:
+                pass
+            return ""
 
         # Read functions from pclntable
         for i in range(n_funcs):
             func_off = pcln_offset + i * func_size
-            if func_off + 8 > pclntab_size:
+            if func_off + 24 > pclntab_size:
                 break
 
             # Parse _func structure
@@ -1151,12 +1188,9 @@ class Reader:
             if entry_off > 0x10000000:  # > 256MB is invalid
                 continue
 
-            # Resolve name from funcnametab
-            if name_off < 0 or name_off >= pclntab_size:
-                continue
-
-            name = names.get(name_off)
-            if not name or len(name) < 2:
+            # Resolve name from funcnametab with full name reconstruction
+            name = get_full_name(name_off)
+            if not name:
                 continue
 
             # Calculate absolute PC

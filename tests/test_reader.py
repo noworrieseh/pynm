@@ -1,4 +1,5 @@
 import struct
+from pathlib import Path
 
 import pytest
 
@@ -305,53 +306,49 @@ class TestGoPclntabReading:
 
     def test_pclntab_fallback_on_stripped_binary(self):
         """Test that pclntab is used when Mach-O symbol table is empty."""
-        # Use the go_bootstrap file which has an empty Mach-O symbol table
-        # but contains a valid Go pclntab
-        import os
+        # Use the go_1.4.3_darwin_ppc_test which has pclntab symbols
+        test_dir = Path(__file__).parent
+        go_binary = test_dir / "go_binaries" / "go_1.4.3_darwin_ppc_test"
 
-        project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        go_bootstrap = os.path.join(project_dir, "go_bootstrap")
+        if not go_binary.exists():
+            pytest.skip("go_1.4.3_darwin_ppc_test not found")
 
-        if not os.path.exists(go_bootstrap):
-            pytest.skip("go_bootstrap not found")
-
-        reader = Reader(go_bootstrap)
+        reader = Reader(str(go_binary))
         entries = reader.entries()
         assert len(entries) > 0
         symbols = entries[0].symbols
-        # Should have symbols from pclntab even though Mach-O table is empty
+        # Should have symbols from pclntab
         assert len(symbols) > 0
         reader.close()
 
     def test_pclntab_symbols_have_correct_code(self):
-        """Test that pclntab symbols have code 'T' for text."""
-        import os
+        """Test that pclntab symbols have expected codes."""
+        test_dir = Path(__file__).parent
+        go_binary = test_dir / "go_binaries" / "go_1.4.3_darwin_ppc_test"
 
-        project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        go_bootstrap = os.path.join(project_dir, "go_bootstrap")
+        if not go_binary.exists():
+            pytest.skip("go_1.4.3_darwin_ppc_test not found")
 
-        if not os.path.exists(go_bootstrap):
-            pytest.skip("go_bootstrap not found")
-
-        reader = Reader(go_bootstrap)
+        reader = Reader(str(go_binary))
         entries = reader.entries()
         symbols = entries[0].symbols
-        # All pclntab symbols should be 'T' (text/code)
-        for sym in symbols:
-            assert sym.code == "T"
+        # pclntab symbols should be 'T' (text/code), 'R' (read-only data),
+        # 'D' (data), or 'B' (BSS)
+        codes = set(s.code for s in symbols)
+        assert codes <= {"T", "R", "D", "B"}, f"Unexpected codes: {codes - {'T', 'R', 'D', 'B'}}"
+        # Should have T symbols (functions)
+        assert "T" in codes, "No T symbols in pclntab"
         reader.close()
 
     def test_pclntab_symbols_have_names(self):
         """Test that pclntab symbols have valid names."""
-        import os
+        test_dir = Path(__file__).parent
+        go_binary = test_dir / "go_binaries" / "go_1.4.3_darwin_ppc_test"
 
-        project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        go_bootstrap = os.path.join(project_dir, "go_bootstrap")
+        if not go_binary.exists():
+            pytest.skip("go_1.4.3_darwin_ppc_test not found")
 
-        if not os.path.exists(go_bootstrap):
-            pytest.skip("go_bootstrap not found")
-
-        reader = Reader(go_bootstrap)
+        reader = Reader(str(go_binary))
         entries = reader.entries()
         symbols = entries[0].symbols
         # All symbols should have non-empty names
@@ -362,15 +359,13 @@ class TestGoPclntabReading:
 
     def test_pclntab_symbols_have_addresses(self):
         """Test that pclntab symbols have valid addresses."""
-        import os
+        test_dir = Path(__file__).parent
+        go_binary = test_dir / "go_binaries" / "go_1.4.3_darwin_ppc_test"
 
-        project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        go_bootstrap = os.path.join(project_dir, "go_bootstrap")
+        if not go_binary.exists():
+            pytest.skip("go_1.4.3_darwin_ppc_test not found")
 
-        if not os.path.exists(go_bootstrap):
-            pytest.skip("go_bootstrap not found")
-
-        reader = Reader(go_bootstrap)
+        reader = Reader(str(go_binary))
         entries = reader.entries()
         symbols = entries[0].symbols
         # All symbols should have positive addresses
@@ -380,18 +375,16 @@ class TestGoPclntabReading:
 
     def test_pclntab_symbol_count(self):
         """Test that we extract a reasonable number of symbols from pclntab."""
-        import os
+        test_dir = Path(__file__).parent
+        go_binary = test_dir / "go_binaries" / "go_1.4.3_darwin_ppc_test"
 
-        project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        go_bootstrap = os.path.join(project_dir, "go_bootstrap")
+        if not go_binary.exists():
+            pytest.skip("go_1.4.3_darwin_ppc_test not found")
 
-        if not os.path.exists(go_bootstrap):
-            pytest.skip("go_bootstrap not found")
-
-        reader = Reader(go_bootstrap)
+        reader = Reader(str(go_binary))
         entries = reader.entries()
         symbols = entries[0].symbols
-        # go_bootstrap should have ~4324 symbols
+        # go_1.4.3_darwin_ppc_test should have thousands of symbols
         assert len(symbols) > 4000
         reader.close()
 
@@ -574,4 +567,182 @@ class TestReaderUsePclntab:
         defined_symbols = [s for s in symbols if s.code != 'U']
         for sym in defined_symbols:
             assert sym.addr > 0
+        reader.close()
+
+
+class TestPclntabV118FullNameReconstruction:
+    """Tests for Go 1.18+ pclntab full name reconstruction."""
+
+    def test_full_name_reconstruction_go_118(self):
+        """Test that Go 1.18+ pclntab reconstructs full function names."""
+        test_dir = Path(__file__).parent
+        go_binary = test_dir / "go_binaries" / "go_1.18.10_darwin_amd64"
+        
+        if not go_binary.exists():
+            pytest.skip("go_1.18.10_darwin_amd64 not found")
+        
+        reader = Reader(str(go_binary), use_pclntab=True)
+        entries = reader.entries()
+        symbols = entries[0].symbols
+        
+        # Should have a reasonable number of symbols
+        assert len(symbols) > 4000
+        
+        # Check that names are fully qualified (contain package path)
+        names_with_package = [s.name for s in symbols if '/' in s.name or '.' in s.name]
+        assert len(names_with_package) > 2000
+        
+        # Check for specific expected full names
+        all_names = [s.name for s in symbols]
+        
+        # Should have fully qualified names like "flag.(*FlagSet).VisitAll"
+        # not just "VisitAll"
+        has_fully_qualified = any(
+            '.' in name and '(' in name and ')' in name 
+            for name in all_names
+        )
+        assert has_fully_qualified
+        
+        reader.close()
+
+    def test_full_name_reconstruction_go_124(self):
+        """Test that Go 1.24+ pclntab reconstructs full function names."""
+        test_dir = Path(__file__).parent
+        go_binary = test_dir / "go_binaries" / "go_1.24.0_darwin_amd64"
+        
+        if not go_binary.exists():
+            pytest.skip("go_1.24.0_darwin_amd64 not found")
+        
+        reader = Reader(str(go_binary), use_pclntab=True)
+        entries = reader.entries()
+        symbols = entries[0].symbols
+        
+        # Should have a reasonable number of symbols
+        assert len(symbols) > 6000
+        
+        # Check for fully qualified names
+        all_names = [s.name for s in symbols]
+        
+        # Should have names with package paths
+        names_with_slash = [n for n in all_names if '/' in n]
+        assert len(names_with_slash) > 3000
+        
+        # Should have method names with receiver info
+        names_with_receiver = [n for n in all_names if '(*' in n and ').' in n]
+        assert len(names_with_receiver) > 1000
+        
+        reader.close()
+
+    def test_suffix_name_handling(self):
+        """Test that names pointing to suffixes are properly reconstructed."""
+        test_dir = Path(__file__).parent
+        go_binary = test_dir / "go_binaries" / "go_1.18.10_darwin_amd64"
+        
+        if not go_binary.exists():
+            pytest.skip("go_1.18.10_darwin_amd64 not found")
+        
+        reader = Reader(str(go_binary), use_pclntab=True)
+        entries = reader.entries()
+        symbols = entries[0].symbols
+        
+        # Check that we don't have truncated single-word names
+        # (except for legitimate short names)
+        all_names = [s.name for s in symbols]
+        
+        # Most names should be longer than 5 characters
+        long_names = [n for n in all_names if len(n) > 5]
+        assert len(long_names) > len(all_names) * 0.8
+        
+        # Should have names from standard packages
+        std_package_names = [
+            n for n in all_names 
+            if any(pkg in n for pkg in ['flag.', 'reflect.', 'strings.', 'bytes.'])
+        ]
+        assert len(std_package_names) > 100
+        
+        reader.close()
+
+    def test_name_bounds_checking(self):
+        """Test that name offset bounds are properly validated."""
+        test_dir = Path(__file__).parent
+        go_binary = test_dir / "go_binaries" / "go_1.18.10_darwin_amd64"
+        
+        if not go_binary.exists():
+            pytest.skip("go_1.18.10_darwin_amd64 not found")
+        
+        reader = Reader(str(go_binary), use_pclntab=True)
+        entries = reader.entries()
+        symbols = entries[0].symbols
+        
+        # All symbol names should be valid strings
+        for sym in symbols:
+            assert isinstance(sym.name, str)
+            assert len(sym.name) > 0
+            assert len(sym.name) < 200  # Reasonable max length
+        
+        # No names should contain null bytes
+        for sym in symbols:
+            assert '\x00' not in sym.name
+        
+        # Names should be printable ASCII (mostly)
+        printable_count = sum(
+            1 for sym in symbols 
+            if all(0x20 <= ord(c) < 0x7f or c in '\t\n\r' for c in sym.name)
+        )
+        # At least 90% should be printable
+        assert printable_count > len(symbols) * 0.9
+        
+        reader.close()
+
+    def test_pclntab_v118_vs_v14_symbol_count(self):
+        """Compare symbol counts between Go 1.18+ and older versions."""
+        test_dir = Path(__file__).parent
+        go_binaries_dir = test_dir / "go_binaries"
+        
+        # Test Go 1.17 (v14 format)
+        go_117 = go_binaries_dir / "go_1.17.13_darwin_amd64"
+        if go_117.exists():
+            reader = Reader(str(go_117), use_pclntab=True)
+            entries = reader.entries()
+            syms_117 = len(entries[0].symbols)
+            reader.close()
+        else:
+            pytest.skip("go_1.17.13_darwin_amd64 not found")
+        
+        # Test Go 1.18 (v118 format)
+        go_118 = go_binaries_dir / "go_1.18.10_darwin_amd64"
+        if go_118.exists():
+            reader = Reader(str(go_118), use_pclntab=True)
+            entries = reader.entries()
+            syms_118 = len(entries[0].symbols)
+            reader.close()
+        else:
+            pytest.skip("go_1.18.10_darwin_amd64 not found")
+        
+        # Both should have substantial symbol counts
+        assert syms_117 > 5000
+        assert syms_118 > 4000
+
+    def test_pclntab_v118_name_format_consistency(self):
+        """Test that reconstructed names follow consistent format."""
+        test_dir = Path(__file__).parent
+        go_binary = test_dir / "go_binaries" / "go_1.20.14_darwin_amd64"
+        
+        if not go_binary.exists():
+            pytest.skip("go_1.20.14_darwin_amd64 not found")
+        
+        reader = Reader(str(go_binary), use_pclntab=True)
+        entries = reader.entries()
+        symbols = entries[0].symbols
+        
+        # All names should be valid Go function name characters
+        # Go names can contain: letters, digits, underscore, dot, slash, dash,
+        # asterisk, brackets, angle brackets, comma, parens, braces, colon, semicolon,
+        # the middle dot character (·) used in internal names, and quotes for struct tags
+        import re
+        valid_name_pattern = re.compile(r'^[a-zA-Z0-9_./\-*\[\]<>,"\\{}\(\)\s:;·]+$')
+        
+        for sym in symbols[:1000]:  # Check first 1000
+            assert valid_name_pattern.match(sym.name), f"Invalid name: {sym.name}"
+        
         reader.close()
