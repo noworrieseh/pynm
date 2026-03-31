@@ -2,6 +2,7 @@ import pytest
 import subprocess
 import tempfile
 import os
+import shutil
 from pathlib import Path
 
 
@@ -12,22 +13,33 @@ def temp_dir():
 
 
 @pytest.fixture
-def go_binary(temp_dir):
-    src = temp_dir / "main.go"
-    src.write_text("""
-package main
-
-import "fmt"
-
-var AppVersion string = "1.0.0"
-
-func main() {
-    fmt.Println("Hello, version:", AppVersion)
-}
-""")
-    bin_path = temp_dir / "test"
-    subprocess.run(["go", "build", "-o", str(bin_path), str(src)], check=True)
-    return bin_path
+def go_binary():
+    """Use pre-built Go binary from test resources.
+    
+    Uses go_1.18.10_darwin_amd64 which has a working pclntab format.
+    Older Go versions (1.17 and earlier) have a different pclntab format
+    that isn't fully supported.
+    """
+    test_dir = Path(__file__).parent
+    go_binaries_dir = test_dir / "go_binaries"
+    
+    # Prefer Go 1.18+ which has pclntab support
+    for version in ['1.24.0', '1.23.4', '1.22.5', '1.21.13', '1.20.14', '1.19.13', '1.18.10']:
+        binary = go_binaries_dir / f"go_{version}_darwin_amd64"
+        if binary.exists():
+            return binary
+    
+    # Fallback to any darwin_amd64 binary
+    for binary in go_binaries_dir.glob("go_*_darwin_amd64"):
+        if binary.exists():
+            return binary
+    
+    # Fallback to any go binary
+    for binary in go_binaries_dir.glob("go_*"):
+        if binary.exists():
+            return binary
+    
+    pytest.skip("No pre-built Go binaries found in tests/go_binaries/")
 
 
 @pytest.fixture
